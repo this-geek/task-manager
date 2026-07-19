@@ -8,6 +8,7 @@ This specification details a lightweight, ultra-low latency, serverless task man
 *   **Frontend**: Single Page Application (SPA) or Server-Side Rendered (SSR) framework (e.g., Remix, Next.js, or solid vanilla JS) hosted on **Cloudflare Pages**.
 *   **Backend**: **Cloudflare Workers** providing stateless API routing, schema validation, and specialized context formatting for Large Language Models (LLMs).
 *   **Database**: **Cloudflare D1**, a distributed native SQLite database engine running at the edge.
+*   **Auth**: Bearer-token authentication, validated at the Worker layer against Cloudflare D1. See §5 for the token model and the admin UI used to issue, rotate, and revoke tokens.
 
 ```
        [ Human UI (Desktop/Mobile) ]        [ Autonomous AI Agent ]
@@ -16,9 +17,12 @@ This specification details a lightweight, ultra-low latency, serverless task man
                   [ HTTPS REST API / JSON Over TLS ]
                                  ||
                      [ Cloudflare Workers Layer ]
+                          (bearer token check)
                                  ||
                      [ Cloudflare D1 (SQLite) ]
 ```
+
+Every request into the Workers layer is authenticated before any routing or database logic runs — there is no unauthenticated path to task data. See §5.2 for the exact validation flow.
 
 ---
 
@@ -84,11 +88,26 @@ CREATE TABLE task_tags (
     FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
 );
 
+-- API Tokens (bearer-token auth for both human sessions and AI agents)
+CREATE TABLE api_tokens (
+    id TEXT PRIMARY KEY, -- UUIDv4
+    name TEXT NOT NULL, -- Human-readable label, e.g. "Claude Agent - Prod"
+    token_hash TEXT NOT NULL UNIQUE, -- SHA-256 hash of the secret; plaintext is never stored
+    token_prefix TEXT NOT NULL, -- First 8 chars of the plaintext, shown in the admin UI for identification
+    scope TEXT NOT NULL CHECK(scope IN ('admin', 'human', 'agent')),
+    created_by TEXT, -- Identifier of the admin who issued the token
+    expires_at TEXT, -- Optional ISO 8601 expiry; NULL = no expiry
+    last_used_at TEXT,
+    revoked_at TEXT, -- NULL while active
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 -- Indexing for Query Optimization
 CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_due_date ON tasks(due_date);
 CREATE INDEX idx_task_dependencies_task ON task_dependencies(task_id);
 CREATE INDEX idx_task_dependencies_blocked ON task_dependencies(blocked_by_task_id);
+CREATE INDEX idx_api_tokens_hash ON api_tokens(token_hash);
 ```
 
 ---
@@ -119,6 +138,8 @@ ightarrow$ `tags` | Descriptive taxonomy filters. |
 
 The REST API balances traditional HTTP verbs for standard mutation alongside semantic context routing designed to minimize context-window consumption for LLMs.
 
+All endpoints below require a valid bearer token (`Authorization: Bearer <token>`) as described in §5. `human`- and `admin`-scoped tokens may call every endpoint in this section; `agent`-scoped tokens are restricted to this section only (never `/api/admin/*`).
+
 ### 4.1 Standard REST Endpoints
 *   `GET /api/tasks` - Query tasks with optional matrix filters (`?status=`, `?assignee=`, `?category=`).
 *   `POST /api/tasks` - Initialize a new card element.
@@ -144,23 +165,64 @@ These endpoints optimize token usage by stripping presentation layers and filter
 
 ---
 
-## 5. UI/UX Functional Interface Requirements
+## 5. Authentication & Authorization
+
+All API traffic is authenticated with a bearer token — there is no anonymous access to task data. The same validation path is used for human UI sessions and AI agents alike, keeping the Worker's auth logic single-purpose and easy to reason about.
+
+### 5.1 Token Model
+*   Every caller presents `Authorization: Bearer <token>`.
+*   Tokens are opaque, high-entropy secrets (32 random bytes, url-safe base64/base62 encoded) with a human-identifiable prefix, e.g. `tm_live_9f3a2c1d...`.
+*   The Worker never stores plaintext. Only a SHA-256 hash (`api_tokens.token_hash`) is persisted; the plaintext is revealed exactly once, at issuance or rotation time, in the admin UI response.
+*   Each token carries a `scope`:
+    *   `admin` — manages tokens via §5.3, plus everything `human` can do.
+    *   `human` — full read/write access to `/api/tasks/*` via the UI.
+    *   `agent` — read/write access to `/api/tasks/*` and `/api/agent/*`; explicitly excluded from `/api/admin/*`.
+
+### 5.2 Request Validation Flow
+1.  The Worker extracts the bearer token, computes its SHA-256 hash, and looks it up in `api_tokens`.
+2.  Returns `401 Unauthorized` if there is no match, `revoked_at IS NOT NULL`, or `expires_at` has passed.
+3.  Returns `403 Forbidden` if the token's `scope` doesn't cover the requested route (e.g. an `agent` token calling `/api/admin/tokens`).
+4.  On success, updates `last_used_at` (best-effort, non-blocking) and attaches the token's `id` and `scope` to the request context as the `actor_id` used for audit purposes (§8.3).
+5.  Enforces per-token rate limiting — default **60 requests/minute** for `agent`-scoped tokens — returning `429 Too Many Requests` when exceeded.
+
+### 5.3 Admin Token Management Endpoints
+Restricted to `admin`-scoped tokens; all other scopes receive `403 Forbidden`.
+
+*   `GET /api/admin/tokens` - List tokens: `id`, `name`, `token_prefix`, `scope`, `created_at`, `last_used_at`, `expires_at`, `revoked_at`. Never returns `token_hash` or plaintext.
+*   `POST /api/admin/tokens` - Issue a new token. Body: `{"name": "...", "scope": "agent" | "human" | "admin", "expires_at": "..."}` (expiry optional). Response includes the **plaintext token exactly once**.
+*   `POST /api/admin/tokens/:id/rotate` - Revokes the existing token and issues a replacement under the same `name`/`scope`. Returns the new plaintext once; the old token is invalid immediately.
+*   `DELETE /api/admin/tokens/:id` - Revoke immediately (sets `revoked_at`). The row is retained, not deleted, to preserve audit history.
+
+### 5.4 Human Sign-In (Open Question)
+How a human first obtains an `admin`- or `human`-scoped session — password, magic link, Cloudflare Access, etc. — is intentionally left open; see §8.4. Whatever mechanism is chosen should ultimately resolve to the same bearer-token validation path described in §5.2, so the Worker has one auth code path regardless of actor type.
+
+---
+
+## 6. UI/UX Functional Interface Requirements
 
 The user interface balances layout density matching Jira boards with reactive, mobile-first design properties.
 
-### 5.1 Desktop Viewport Strategy
+### 6.1 Desktop Viewport Strategy
 *   **Kanban Dynamic Board Grid**: A responsive flex or table structure tracking the workflow channels. It supports drag-and-drop operations that trigger background `PATCH` API events.
 *   **Contextual Drawer Component**: Selecting any board element expands a lateral inspector panel without breaking board spatial alignments. The panel exposes granular metadata controls (e.g., time logs, dependency toggles).
 *   **Global Structural Filtering**: Persistent header configurations allow dynamic multi-select groupings by Assignee, Category, Tags, or an "AI Target Mode View" that mimics the `actionable` API filter.
 
-### 5.2 Mobile Viewport Strategy ($< 768	ext{px}$)
+### 6.2 Mobile Viewport Strategy ($< 768	ext{px}$)
 *   **Normalized Linear Layout**: Column arrays break down into a single comprehensive active track.
 *   **Segmented Control Pivot**: The UI exposes a sticky global tap-bar allowing users to shift active visibility focus across statuses (e.g., `Backlog (12)`, `To Do (3)`, `In Progress (1)`).
 *   **Modal Interventions**: Contextual panels transition cleanly into overlay sheets anchored at the base of the device screen (`bottom sheet pattern`), using enlarged click boundaries ($44 	imes 44	ext{px}$) to avoid fat-finger input errors.
 
+### 6.3 Settings / Admin Area
+A dedicated route (e.g. `/settings/tokens`), visible only to `admin`-scoped sessions, provides full lifecycle management for API tokens without touching raw SQL or the Cloudflare dashboard:
+*   **Token table**: name, scope badge, masked value (`token_prefix••••••••`), status (Active / Revoked / Expired), created date, last-used date.
+*   **Issue Token**: modal form (name, scope, optional expiry). On submit, displays the plaintext token once in a copyable field with an explicit "copy it now — it won't be shown again" warning.
+*   **Rotate**: per-row action behind a confirmation step; immediately invalidates the old token and displays the new plaintext once, same as issuance.
+*   **Revoke**: per-row action behind a confirmation step; takes effect immediately, no grace period.
+*   Follows the same mobile-first patterns as the rest of the app (§6.2) — the token table collapses to a card list, and issue/rotate/revoke flows use the bottom-sheet modal pattern on mobile.
+
 ---
 
-## 6. System Integrity & AI Guardrails
+## 7. System Integrity & AI Guardrails
 
 Allowing programmatic mutation of database state by external automated agents presents severe transactional risks. The application execution layer enforces the following safety controls:
 
@@ -169,25 +231,26 @@ ightarrow B
 ightarrow A$), the execution context halts and throws an explicit `422 Unprocessable Entity` status code to the agent.
 2.  **Audit Trail Immutability**: Transaction timestamps (`created_at`, `updated_at`, `logged_at`) are computed exclusively by database trigger mechanics. Programmatic modifications attempting to fake historic or future log signatures are rejected.
 3.  **Sanitization and Content Protection**: Markdown structures within descriptions are permitted, but raw HTML vectors are aggressively scrubbed by standard regex and parsing filters prior to record commitments to prevent prompt injection or XSS payloads from polluting client browsers.
+4.  **Token Secrecy & Rate Limiting**: Plaintext API tokens are never persisted or logged; only their SHA-256 hash is stored (§5.1), and the plaintext is surfaced to the admin UI exactly once, at issuance or rotation. `agent`-scoped tokens are rate-limited at the Worker layer (default 60 requests/minute; §5.2), with `429` responses on excess to contain erratic automated loops.
 
 ---
 
-## 7. Ambiguities & Recommended Enhancements for Review
+## 8. Ambiguities & Recommended Enhancements for Review
 
 During implementation planning, several critical edge cases and enhancements were identified that warrant consideration before finalizing development:
 
-### 7.1 Multi-Agent Concurrency Control (Ambiguity)
+### 8.1 Multi-Agent Concurrency Control (Ambiguity)
 *   **The Problem**: If an AI agent and a human user (or two distinct AI agents) read the database state simultaneously and make conflicting updates, the latter update will silently overwrite the first ("last write wins").
 *   **Proposed Enhancement**: Add an incremental `version` integer column to the `tasks` table. Implement **Optimistic Concurrency Control (OCC)**. Every `PATCH` request must include the last seen `version`. If the version in the database is higher, the worker rejects the update with a `409 Conflict`, forcing the agent to fetch the updated entity state and re-evaluate its action.
 
-### 7.2 AI Authentication, Authorization, and Scoping (Ambiguity)
-*   **The Problem**: The initial specification does not separate human user credentials from AI service accounts, leaving the system vulnerable if an automated loop behaves erratically.
-*   **Proposed Enhancement**: Implement a dual-token access model using Cloudflare Workers Secret variables or D1 token verification. AI agents should use dedicated API keys with strict **Rate Limiting** (e.g., maximum 60 requests per minute) and bounded database scopes, separating them from human bearer tokens to protect resource consumption.
-
-### 7.3 Real-Time UI Sync & Execution Feedback Loop (Enhancement)
+### 8.2 Real-Time UI Sync & Execution Feedback Loop (Enhancement)
 *   **The Problem**: When an AI agent modifies task attributes or moves a card across columns, a human viewing the desktop dashboard will not see changes until they refresh the browser page.
 *   **Proposed Enhancement**: Integrate **Cloudflare Durable Objects** or **Server-Sent Events (SSE)** to provide a real-time reactive pipeline. When an agent logs hours or unblocks a dependency, the worker publishes a lightweight state transition packet, immediately shifting the card element on the human's screen.
 
-### 7.4 Comprehensive Operations Audit Logging (Enhancement)
+### 8.3 Comprehensive Operations Audit Logging (Enhancement)
 *   **The Problem**: If an autonomous agent erroneously deletes a task path or changes descriptions across dozens of cards, root-cause debugging becomes impossible without full point-in-time recovery logs.
-*   **Proposed Enhancement**: Create a dedicated `audit_trail` table inside the SQLite engine tracking `actor_id` (human vs. agent identifier), `action_type` (`INSERT`, `UPDATE`, `DELETE`), `task_id`, `field_changed`, `old_value`, and `new_value`. This ensures full observability and provides a mechanism to revert rogue AI behaviors safely.
+*   **Proposed Enhancement**: Create a dedicated `audit_trail` table inside the SQLite engine tracking `actor_id` (human vs. agent identifier, per §5.2), `action_type` (`INSERT`, `UPDATE`, `DELETE`), `task_id`, `field_changed`, `old_value`, and `new_value`. This ensures full observability and provides a mechanism to revert rogue AI behaviors safely.
+
+### 8.4 Human Sign-In Mechanism (Ambiguity)
+*   **The Problem**: §5 specifies how bearer tokens are validated and how admins manage them, but not how a human obtains their *first* `admin`-scoped token — bootstrapping the initial admin account is still unspecified.
+*   **Proposed Enhancement**: Options include (a) a one-time setup token minted as a Cloudflare Workers secret at deploy time, exchanged for the first `admin` token on first run; (b) Cloudflare Access in front of the Pages UI only, with an authenticated Access identity triggering a token exchange; (c) a minimal password-based login screen backed by a `users` table. Given the project's lightweight scope, this should be decided based on how many humans will actually use the tool, not built defensively for scale that doesn't exist yet.

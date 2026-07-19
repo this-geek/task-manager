@@ -19,6 +19,7 @@ Everything runs on Cloudflare — no separate hosting, no containers, no dedicat
 | Frontend | SPA/SSR (Remix, Next.js, or vanilla JS) on **Cloudflare Pages**, with a fresh, modern UI |
 | Backend | **Cloudflare Workers** — stateless API routing, validation, LLM-optimized formatting |
 | Database | **Cloudflare D1** (SQLite at the edge) |
+| Auth | Bearer tokens, validated at the Worker layer against D1 |
 
 ```
    [ Human UI (Desktop/Mobile) ]        [ Autonomous AI Agent ]
@@ -27,6 +28,7 @@ Everything runs on Cloudflare — no separate hosting, no containers, no dedicat
               [ HTTPS REST API / JSON Over TLS ]
                              ||
                  [ Cloudflare Workers Layer ]
+                      (bearer token check)
                              ||
                  [ Cloudflare D1 (SQLite) ]
 ```
@@ -66,6 +68,18 @@ Tasks are the core entity, with supporting tables for dependencies, links, time 
 
 These endpoints exist to strip presentation-layer noise and minimize context-window usage for LLM callers.
 
+## Auth
+
+Every request requires `Authorization: Bearer <token>` — there's no anonymous access. Tokens are opaque secrets hashed (SHA-256) before storage in D1, scoped as `admin`, `human`, or `agent`, and optionally expiring. `agent`-scoped tokens are rate-limited (default 60 req/min) and can't reach the admin endpoints.
+
+A **Settings → Tokens** admin area (`admin` scope only) covers the full lifecycle:
+
+- **Issue** — name a token, pick a scope, optional expiry; the plaintext is shown once, then never again.
+- **Rotate** — invalidates the old token and issues a replacement under the same name/scope.
+- **Revoke** — immediate, no grace period.
+
+How a human gets their *first* admin session is still an open question — see [`docs/app-spec.md § 8.4`](docs/app-spec.md#84-human-sign-in-mechanism-ambiguity). Full token model: [`docs/app-spec.md § 5`](docs/app-spec.md#5-authentication--authorization).
+
 ## UI
 
 - **Desktop**: Kanban board with drag-and-drop, a contextual detail drawer, and global filtering (assignee/category/tags/"AI Target Mode").
@@ -77,8 +91,9 @@ These endpoints exist to strip presentation-layer noise and minimize context-win
 - **Circular dependency prevention** on `task_dependencies` writes (`422` on a detected cycle).
 - **Immutable audit timestamps** — `created_at`/`updated_at`/`logged_at` are database-controlled, not client-settable.
 - **Input sanitization** — Markdown allowed in descriptions; raw HTML is stripped before storage.
+- **Token secrecy & rate limiting** — plaintext tokens are never stored or logged; `agent`-scoped tokens are rate-limited.
 
-See [`docs/app-spec.md § 6`](docs/app-spec.md#6-system-integrity--ai-guardrails) for details, and [§ 7](docs/app-spec.md#7-ambiguities--recommended-enhancements-for-review) for open design questions (optimistic concurrency, agent auth/rate-limiting, real-time sync, audit trail) still under consideration.
+See [`docs/app-spec.md § 7`](docs/app-spec.md#7-system-integrity--ai-guardrails) for details, and [§ 8](docs/app-spec.md#8-ambiguities--recommended-enhancements-for-review) for open design questions (optimistic concurrency, real-time sync, audit trail, human sign-in bootstrap) still under consideration.
 
 ## Status
 
