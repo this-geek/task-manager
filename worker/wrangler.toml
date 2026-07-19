@@ -9,12 +9,12 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 # Origin allowed to call this API cross-origin (the Pages frontend URL).
 # "*" is fine pre-launch since auth is bearer-token, not cookie-based.
-ALLOWED_ORIGIN = "*"
+ALLOWED_ORIGIN = "https://tasks.rysr.com"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "task_manager_db"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "a94a4b25-ad29-4ec7-9a47-c89a8f7c0d54"
 migrations_dir = "migrations"
 
 [[durable_objects.bindings]]
