@@ -125,8 +125,7 @@ To facilitate predictable serialization and parsing by human UI components and L
 | `due_date` | String (Date) | `tasks.due_date` | Date marker formatted as `YYYY-MM-DD`. |
 | `category` | String | `tasks.category` | Primary work stream grouping. |
 | `assignee` | String | `tasks.assignee` | Human actor or AI agent entity reference. |
-| `tags` | Array of Strings| `task_tags` $
-ightarrow$ `tags` | Descriptive taxonomy filters. |
+| `tags` | Array of Strings| `task_tags` → `tags` | Descriptive taxonomy filters. |
 | `links` | Array of Objects| `task_links` | Dynamic external connections: `[{"url": "...", "label": "..."}]`. |
 | `dependencies` | Array of Strings| `task_dependencies` | Collection of `task_id` markers currently blocking this task. |
 | `estimated_time`| Integer | `tasks.estimated_time` | Target allocation length specified in **minutes**. |
@@ -207,10 +206,10 @@ The user interface balances layout density matching Jira boards with reactive, m
 *   **Contextual Drawer Component**: Selecting any board element expands a lateral inspector panel without breaking board spatial alignments. The panel exposes granular metadata controls (e.g., time logs, dependency toggles).
 *   **Global Structural Filtering**: Persistent header configurations allow dynamic multi-select groupings by Assignee, Category, Tags, or an "AI Target Mode View" that mimics the `actionable` API filter.
 
-### 6.2 Mobile Viewport Strategy ($< 768	ext{px}$)
+### 6.2 Mobile Viewport Strategy (< 768px)
 *   **Normalized Linear Layout**: Column arrays break down into a single comprehensive active track.
 *   **Segmented Control Pivot**: The UI exposes a sticky global tap-bar allowing users to shift active visibility focus across statuses (e.g., `Backlog (12)`, `To Do (3)`, `In Progress (1)`).
-*   **Modal Interventions**: Contextual panels transition cleanly into overlay sheets anchored at the base of the device screen (`bottom sheet pattern`), using enlarged click boundaries ($44 	imes 44	ext{px}$) to avoid fat-finger input errors.
+*   **Modal Interventions**: Contextual panels transition cleanly into overlay sheets anchored at the base of the device screen (`bottom sheet pattern`), using enlarged click boundaries (44×44px) to avoid fat-finger input errors.
 
 ### 6.3 Settings / Admin Area
 A dedicated route (e.g. `/settings/tokens`), visible only to `admin`-scoped sessions, provides full lifecycle management for API tokens without touching raw SQL or the Cloudflare dashboard:
@@ -226,9 +225,7 @@ A dedicated route (e.g. `/settings/tokens`), visible only to `admin`-scoped sess
 
 Allowing programmatic mutation of database state by external automated agents presents severe transactional risks. The application execution layer enforces the following safety controls:
 
-1.  **Circular Dependency Interception**: Any mutation updating `task_dependencies` initializes an in-memory or SQLite Common Table Expression (CTE) check. If the modification traces a self-referencing closed loop ($A 
-ightarrow B 
-ightarrow A$), the execution context halts and throws an explicit `422 Unprocessable Entity` status code to the agent.
+1.  **Circular Dependency Interception**: Any mutation updating `task_dependencies` initializes an in-memory or SQLite Common Table Expression (CTE) check. If the modification traces a self-referencing closed loop (A → B → A), the execution context halts and throws an explicit `422 Unprocessable Entity` status code to the agent.
 2.  **Audit Trail Immutability**: Transaction timestamps (`created_at`, `updated_at`, `logged_at`) are computed exclusively by database trigger mechanics. Programmatic modifications attempting to fake historic or future log signatures are rejected.
 3.  **Sanitization and Content Protection**: Markdown structures within descriptions are permitted, but raw HTML vectors are aggressively scrubbed by standard regex and parsing filters prior to record commitments to prevent prompt injection or XSS payloads from polluting client browsers.
 4.  **Token Secrecy & Rate Limiting**: Plaintext API tokens are never persisted or logged; only their SHA-256 hash is stored (§5.1), and the plaintext is surfaced to the admin UI exactly once, at issuance or rotation. `agent`-scoped tokens are rate-limited at the Worker layer (default 60 requests/minute; §5.2), with `429` responses on excess to contain erratic automated loops.
