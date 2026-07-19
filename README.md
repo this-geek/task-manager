@@ -78,7 +78,7 @@ A **Settings → Tokens** admin area (`admin` scope only) covers the full lifecy
 - **Rotate** — invalidates the old token and issues a replacement under the same name/scope.
 - **Revoke** — immediate, no grace period.
 
-How a human gets their *first* admin session is still an open question — see [`docs/app-spec.md § 8.4`](docs/app-spec.md#84-human-sign-in-mechanism-ambiguity). Full token model: [`docs/app-spec.md § 5`](docs/app-spec.md#5-authentication--authorization).
+A human gets their *first* admin token via a one-time setup-secret exchange: the Worker is deployed with a `SETUP_TOKEN` secret, and `POST /api/setup` (with that secret as the bearer token) mints the first admin token — then refuses forever after (§8.4 in the spec, resolved this way for this build). Full token model: [`docs/app-spec.md § 5`](docs/app-spec.md#5-authentication--authorization).
 
 ## UI
 
@@ -93,15 +93,101 @@ How a human gets their *first* admin session is still an open question — see [
 - **Input sanitization** — Markdown allowed in descriptions; raw HTML is stripped before storage.
 - **Token secrecy & rate limiting** — plaintext tokens are never stored or logged; `agent`-scoped tokens are rate-limited.
 
-See [`docs/app-spec.md § 7`](docs/app-spec.md#7-system-integrity--ai-guardrails) for details, and [§ 8](docs/app-spec.md#8-ambiguities--recommended-enhancements-for-review) for open design questions (optimistic concurrency, real-time sync, audit trail, human sign-in bootstrap) still under consideration.
+See [`docs/app-spec.md § 7`](docs/app-spec.md#7-system-integrity--ai-guardrails) for details. The § 8 enhancements are all implemented in this build:
+
+- **Optimistic concurrency** (§8.1) — `tasks.version` is required on every `PATCH`; a stale version gets `409` back with the current entity.
+- **Real-time sync** (§8.2) — a Durable Object fans out task change events over SSE (`GET /api/events`); the board updates live without a refresh.
+- **Audit trail** (§8.3) — every mutation writes an `audit_trail` row (actor, action, field, old/new value).
+- **Human sign-in bootstrap** (§8.4) — the setup-secret exchange described above.
 
 ## Status
 
-This project is in the specification stage — implementation has not started yet. See `docs/app-spec.md` for the authoritative design; this README will be updated as the Workers API, D1 schema, and frontend are built out.
+Implemented: D1 schema + migrations, the full Workers API (`worker/`), and the React/Vite frontend (`frontend/`) — Kanban board, drawer, mobile layout, Settings → Tokens admin.
 
 ## Development
 
-_To be filled in once the Cloudflare Workers/Pages project scaffolding and D1 database are set up (e.g. `wrangler` config, local dev commands, migration commands)._
+Two independent Cloudflare projects: `worker/` (Workers API + D1 + Durable Object) and `frontend/` (Pages SPA).
+
+```bash
+# Worker API
+cd worker
+npm install
+wrangler secret put SETUP_TOKEN         # or add SETUP_TOKEN to .dev.vars for local dev
+npm run db:migrate:local                # apply D1 migrations locally
+npm run dev                             # wrangler dev, http://localhost:8787
+npm test                                # vitest (Workers pool)
+npm run deploy                          # wrangler deploy
+
+# Frontend SPA
+cd frontend
+npm install
+cp .env.example .env.local              # point VITE_API_BASE_URL at the Worker
+npm run dev                             # vite dev, http://localhost:5173
+npm run build                           # typecheck + production build
+npm run deploy                          # wrangler pages deploy dist
+```
+
+First-run bootstrap: with the Worker running, `POST /api/setup` with `Authorization: Bearer <SETUP_TOKEN>` mints the first admin token (or use the frontend's "First-time setup" tab on the sign-in screen).
+
+## Deployment
+
+Requires a Cloudflare account and the `wrangler` CLI logged in (`wrangler login`). Deploy the Worker API first, then the frontend, since the frontend needs the Worker's URL.
+
+### 1. Create the D1 database
+
+```bash
+cd worker
+npx wrangler d1 create task_manager_db
+```
+
+Copy the `database_id` from the output into `worker/wrangler.toml` (`[[d1_databases]] database_id = "..."`, currently `REPLACE_WITH_D1_DATABASE_ID`).
+
+### 2. Apply migrations to the remote database
+
+```bash
+npm run db:migrate:remote
+```
+
+### 3. Set the setup secret
+
+Generate a strong random value and store it as a Worker secret — this is what mints the first admin token, so keep it private:
+
+```bash
+npx wrangler secret put SETUP_TOKEN
+```
+
+### 4. Deploy the Worker
+
+```bash
+npm run deploy
+```
+
+This also provisions the `RealtimeHub` Durable Object and the agent rate limiter — both are declared in `wrangler.toml`, no extra setup needed. Note the deployed URL (a `*.workers.dev` subdomain, or your custom domain/route if configured in the Cloudflare dashboard).
+
+### 5. Deploy the frontend
+
+```bash
+cd ../frontend
+echo "VITE_API_BASE_URL=https://<your-worker-url>" > .env.production
+npm run build
+npm run deploy
+```
+
+(Alternatively, connect this repo to a Cloudflare Pages project in the dashboard for git-based deploys — set `VITE_API_BASE_URL` as a Pages build environment variable instead of `.env.production`, and set the build command/output directory to `npm run build` / `dist`.)
+
+### 6. Lock down CORS (optional but recommended)
+
+`worker/wrangler.toml`'s `ALLOWED_ORIGIN` var defaults to `"*"`. Once you know the Pages URL, set it explicitly and redeploy the Worker:
+
+```bash
+cd ../worker
+# edit wrangler.toml: ALLOWED_ORIGIN = "https://your-pages-url.pages.dev"
+npm run deploy
+```
+
+### 7. Bootstrap the first admin token
+
+Open the deployed frontend URL, use the "First-time setup" tab, and paste the `SETUP_TOKEN` value from step 3 (or call `POST /api/setup` directly with `Authorization: Bearer <SETUP_TOKEN>`). This works exactly once — the endpoint refuses once any admin token exists. Sign in with the returned token, then use Settings → Tokens to issue tokens for other humans and AI agents.
 
 ## License
 

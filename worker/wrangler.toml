@@ -1,0 +1,32 @@
+name = "task-manager-api"
+main = "src/index.ts"
+compatibility_date = "2025-07-01"
+compatibility_flags = ["nodejs_compat"]
+
+# SETUP_TOKEN (bootstrap secret for POST /api/setup, §8.4) is set via
+# `wrangler secret put SETUP_TOKEN` — never committed here.
+
+[vars]
+# Origin allowed to call this API cross-origin (the Pages frontend URL).
+# "*" is fine pre-launch since auth is bearer-token, not cookie-based.
+ALLOWED_ORIGIN = "*"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "task_manager_db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[durable_objects.bindings]]
+name = "REALTIME_HUB"
+class_name = "RealtimeHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RealtimeHub"]
+
+# Per-token rate limiting for agent-scoped callers (spec §5.2: 60 req/min default).
+[[ratelimits]]
+name = "AGENT_RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
