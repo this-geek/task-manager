@@ -18,6 +18,7 @@ export function TopBar({ onNewTask }: Props) {
           </button>
         )}
         {session?.isAdmin && <Link to="/settings/tokens">Settings · Tokens</Link>}
+        {session?.isAdmin && <Link to="/settings/mcp">Settings · MCP</Link>}
         <button type="button" className="ghost" onClick={signOut}>
           Sign out
         </button>

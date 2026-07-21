@@ -56,3 +56,8 @@ export interface ApiToken {
   revoked_at: string | null;
   created_at: string;
 }
+
+export interface McpConfig {
+  enabled: boolean;
+  write_enabled: boolean;
+}

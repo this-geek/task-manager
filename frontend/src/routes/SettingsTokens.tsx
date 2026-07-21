@@ -45,6 +45,9 @@ export function SettingsTokens() {
       <header className="top-bar">
         <Link to="/">← Board</Link>
         <h1>Settings · Tokens</h1>
+        <nav>
+          <Link to="/settings/mcp">MCP</Link>
+        </nav>
       </header>
 
       <div className="tokens-page">

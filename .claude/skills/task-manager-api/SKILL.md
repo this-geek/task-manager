@@ -17,6 +17,8 @@ Look for these first, in order:
 
 Never guess a URL or invent a token. Every request needs one.
 
+> **MCP alternative.** Non-Claude MCP clients (Cursor, custom agents) can reach the same board over a remote MCP server at `POST {base}/api/mcp` instead of raw REST — same bearer token, same tools (`list_tasks`, `actionable`, `create_task`, `update_task`, …). It's admin-gated (Settings → MCP) and off by default. As a skill-driven caller you don't need it; keep using the REST calls below.
+
 ## 2. Auth
 
 Every request requires `Authorization: Bearer <token>`. Tokens are scoped:

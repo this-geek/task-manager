@@ -68,6 +68,12 @@ Tasks are the core entity, with supporting tables for dependencies, links, time 
 
 These endpoints exist to strip presentation-layer noise and minimize context-window usage for LLM callers.
 
+### MCP server
+
+- `POST /api/mcp` — a remote [Model Context Protocol](https://modelcontextprotocol.io) server (Streamable HTTP, stateless) that exposes the board to any MCP client (Claude Desktop, Cursor, custom agents) as typed tools: `list_tasks`, `get_task`, `agenda`, `actionable`, `blocked`, `create_task`, `update_task`, `delete_task`, `log_time`.
+
+It's a thin transport shim over the endpoints above — same bearer tokens, same guardrails, no separate task logic. It's **off by default**; an admin turns it on (and can restrict it to read-only) under **Settings → MCP**. To connect a client, point it at `<your-api-url>/api/mcp` and authenticate with an `agent`-scoped token as the `Authorization: Bearer <token>` header. See [`docs/app-spec.md § 9`](docs/app-spec.md#9-mcp-server-decided-enhancement).
+
 ## Auth
 
 Every request requires `Authorization: Bearer <token>` — there's no anonymous access. Tokens are opaque secrets hashed (SHA-256) before storage in D1, scoped as `admin`, `human`, or `agent`, and optionally expiring. `agent`-scoped tokens are rate-limited (default 60 req/min) and can't reach the admin endpoints.
@@ -102,7 +108,7 @@ See [`docs/app-spec.md § 7`](docs/app-spec.md#7-system-integrity--ai-guardrails
 
 ## Status
 
-Implemented: D1 schema + migrations, the full Workers API (`worker/`), and the React/Vite frontend (`frontend/`) — Kanban board, drawer, mobile layout, Settings → Tokens admin.
+Implemented: D1 schema + migrations, the full Workers API (`worker/`), and the React/Vite frontend (`frontend/`) — Kanban board, drawer, mobile layout, Settings → Tokens and Settings → MCP admin.
 
 ## Development
 

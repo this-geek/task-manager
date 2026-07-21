@@ -254,3 +254,14 @@ During implementation planning, several critical edge cases and enhancements wer
 ### 8.4 Human Sign-In Mechanism (Ambiguity)
 *   **The Problem**: §5 specifies how bearer tokens are validated and how admins manage them, but not how a human obtains their *first* `admin`-scoped token — bootstrapping the initial admin account is still unspecified.
 *   **Proposed Enhancement**: Options include (a) a one-time setup token minted as a Cloudflare Workers secret at deploy time, exchanged for the first `admin` token on first run; (b) Cloudflare Access in front of the Pages UI only, with an authenticated Access identity triggering a token exchange; (c) a minimal password-based login screen backed by a `users` table. Given the project's lightweight scope, this should be decided based on how many humans will actually use the tool, not built defensively for scale that doesn't exist yet.
+
+---
+
+## 9. MCP Server (Decided Enhancement)
+
+A remote **Model Context Protocol** server exposes the board to any MCP-capable client (Claude Desktop, Cursor, custom agents), complementing the raw REST API and the `task-manager-api` skill. It is deliberately a **transport shim, not a second API**: it owns no task logic. This was added as a scoped enhancement beyond §8's four; further MCP-specific features should still follow §8's "ask before assuming in scope" rule.
+
+*   **Endpoint**: `POST /api/mcp` — Streamable HTTP transport, stateless (each JSON-RPC request is answered with a single `application/json` response; no SSE session). `GET` returns `405`. Handles `initialize`, `tools/list`, and `tools/call`.
+*   **Auth (§5)**: the same bearer token model. The endpoint rejects any request without a valid token (`401`); each `tools/call` re-enters the Worker's own routes carrying that token, so per-route scope enforcement, rate limiting, and every §7 guardrail (OCC/`409`, cycle detection/`422`, sanitization, audit, realtime) apply exactly once, unchanged. No new credential path is introduced.
+*   **Tools**: a 1:1 mapping onto existing endpoints — reads (`list_tasks`, `get_task`, `agenda`, `actionable`, `blocked`) and writes (`create_task`, `update_task`, `delete_task`, `log_time`).
+*   **Admin control (§6.3)**: configuration is surfaced in the Settings area (Settings → MCP) and persisted in a `settings` key/value table. `enabled` is a master on/off switch (**off by default** — a newly added remote interface is not exposed until an admin turns it on); `write_enabled` optionally restricts the server to read-only tools. Both are admin-only (`GET`/`PATCH /api/admin/mcp`).

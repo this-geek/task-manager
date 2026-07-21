@@ -1,4 +1,4 @@
-import type { ApiToken, TaskDetailEntity, TaskEntity, TokenScope } from './types';
+import type { ApiToken, McpConfig, TaskDetailEntity, TaskEntity, TokenScope } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -74,6 +74,11 @@ export const api = {
     request<ApiToken & { token: string }>(`/api/admin/tokens/${id}/rotate`, token, { method: 'POST' }),
 
   revokeToken: (token: string, id: string) => request<ApiToken>(`/api/admin/tokens/${id}`, token, { method: 'DELETE' }),
+
+  getMcpConfig: (token: string) => request<{ mcp: McpConfig }>('/api/admin/mcp', token),
+
+  updateMcpConfig: (token: string, patch: Partial<McpConfig>) =>
+    request<{ mcp: McpConfig }>('/api/admin/mcp', token, { method: 'PATCH', body: JSON.stringify(patch) }),
 };
 
 export function eventsUrl(token: string): string {

@@ -4,6 +4,7 @@ import { useAuth } from './lib/auth';
 import { SignIn } from './routes/SignIn';
 import { Board } from './routes/Board';
 import { SettingsTokens } from './routes/SettingsTokens';
+import { SettingsMcp } from './routes/SettingsMcp';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { session } = useAuth();
@@ -35,6 +36,14 @@ export function App() {
         element={
           <RequireAdmin>
             <SettingsTokens />
+          </RequireAdmin>
+        }
+      />
+      <Route
+        path="/settings/mcp"
+        element={
+          <RequireAdmin>
+            <SettingsMcp />
           </RequireAdmin>
         }
       />
